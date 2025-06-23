@@ -1,0 +1,135 @@
+#################TFs analysis################
+########Rstudio#########
+###homology gene processing###
+merged_result <- final_result %>%
+    left_join(human_genes, by = c("G2" = "ensembl_gene_id"))
+
+merged_result_clean <- merged_result[, !(names(merged_result) %in% c("external_gene_name.x", "hsapiens_homolog_ensembl_gene.x"))]
+
+homology_mapping1 <- final_result[!is.na(final_result$hsapiens_homolog_ensembl_gene), ]
+
+homology_mapping1 <- merged_result_clean[
+  !is.na(merged_result_clean$hsapiens_homolog_ensembl_gene.y) & 
+  merged_result_clean$hsapiens_homolog_ensembl_gene.y != "", 
+]
+mapped_genes1 <- homology_mapping1$G1
+exprMat_mapped1 <- exprMat_filtered[rownames(exprMat_filtered) %in% mapped_genes1, ]
+human_gene_names1 <- homology_mapping1$hsapiens_homolog_ensembl_gene[match(rownames(exprMat_mapped1), homology_mapping1$G1)]
+mapped_genes1 <- homology_mapping1$G1
+
+###construct the loom file###
+expr_matrix <- as.matrix(exprMat_mapped1)
+row_attrs <- list("Gene" = rownames(exprMat_mapped1))
+col_attrs <- list("CellID" = colnames(exprMat_mapped1))
+loompy$create(loom_filename, expr_matrix, row_attrs = row_attrs, col_attrs = col_attrs)
+
+###GRN###
+pyscenic grn  --num_workers 10 --output step1_grn.tsv --method grnboost2 ./exprMat_mapped1.loom ./db/allTFs_hg38.txt
+
+###regulatory module###
+pyscenic ctx ./step1_grn.csv ./db/hg38__refseq-r80__10kb_up_and_down_tss.mc9nr.genes_vs_motifs.rankings.feather 
+              --annotations_fname ./db/motifs-v9-nr.hgnc-m0.001-o0.0.tbl  
+              --expression_mtx_fname ./exprMat_mapped1.loom  
+              --mode "dask_multiprocessing" 
+              --output step2out_ctx.csv 
+              --num_workers 10 
+              --mask_dropouts
+
+##AUCell scoring###
+pyscenic aucell ./sample.loom 
+                ./step2out_test_new.csv 
+                --output aucell_test_new.loom 
+                --num_workers 10
+
+########The average value of TFs in different cell types########
+library(pheatmap)
+selectedResolution <- "celltype"
+
+### Split the cells by cluster
+cellsPerGroup <- split(rownames(cellTypes), 
+                        cellTypes[,selectedResolution]) 
+sub_regulonAUCC <- sub_regulonAUC[onlyNonDuplicatedExtended(rownames(sub_regulonAUC)),]
+dim(sub_regulonAUCC)
+
+### Calculate average expression:
+regulonActivity_byGroup <- sapply(cellsPerGroup,
+                                       function(cells) 
+                                       rowMeans(getAUC(sub_regulonAUCC)[,cells]))
+
+### Scale expression:
+regulonActivity_byGroup_Scaled <- t(scale(t(regulonActivity_byGroup),
+                                           center = T, scale=T))
+
+###Regulon_module_(CSI calculate)###
+pyscenic aucell --num_workers 6 \
+--output aucell_test_new.csv \
+sce.loom \
+regulons.csv
+
+library(SCopeLoomR)
+library(AUCell)
+library(SCENIC)
+
+sce_SCENIC <- open_loom("aucell_test_new.loom")
+regulonAUC <- get_regulons_AUC(sce_SCENIC, column.attr.name='RegulonsAUC')
+data <- regulonAUC@assays@data$AUC
+data <- t(data)
+rm(sce_SCENIC, regulonAUC, data)
+
+CSI_matrix_cal <- function(regulon,
+                           CSI_threshold,
+                           module_k,
+                           module_color=F,
+                           Heatmap_col=NULL,
+                           legend_parm = c("number","character"),
+                           rect_color,
+                           label_reg=NULL){
+  
+  #calculate CSI
+  
+  Mcor<-cor(regulon)
+  n<-nrow(Mcor)
+
+  CSI<-matrix(nrow=n,ncol=n)
+  
+  for (i in 1:n){
+    for(j in 1:n){
+      
+      if(i==j) {
+        
+        CSI[i,j] <- 1
+        
+      } else{
+        
+        nodeA <- names(which(Mcor[i,]>= Mcor[i,j]-0.05))
+        nodeB <- names(which(Mcor[,j]>= Mcor[i,j]-0.05))
+        CSI[i,j]<- 1-((length(unique(c(nodeA,nodeB))))/n)
+          
+      }
+      
+    }
+    
+  }
+  
+  rownames(CSI)<-colnames(regulon)
+  colnames(CSI)<-colnames(regulon)
+  
+  CSI_matrix <- as.data.frame(CSI)
+  write.csv(CSI_matrix, file = './CSI_matrix.csv')
+
+####tf-tf network####
+CSI_matrix <- read.csv("CSI_matrix.csv", header = T, row.names = 1,check.names = F)
+CSI_net <- CSI_matrix
+CSI_net$regulon <- rownames(CSI_net)
+
+library(reshape2)
+CSI_net<-melt(CSI_net, id.vars = c("regulon"),
+                  measure.vars = 1:209,
+                  value.name = 'CSI')
+
+write.csv(CSI_net, file = "CSI_net.csv")
+
+#network
+out<-CSI_net[which(CSI_net[,3]>0.8),]
+#module文件
+module <- read.csv("Module.csv", header = T, row.names = 1, check.names = F)
