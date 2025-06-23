@@ -1,0 +1,95 @@
+#################Raw sequencing data processing################
+##Reference: 
+#https://support.10xgenomics.com/single-cell-gene-expression/software/pipelines/latest/using/tutorials
+
+#Expression matrix (Cellranger)
+path1 = "~/Bos_grunniens.LU_Bosgru_v3.0.113.gtf"  #change to your genome annotation file 
+path2 = "~/Bos_grunniens.LU_Bosgru_v3.0.113.gtf"  #change to your corresponding name
+path3 = "~/index/Bos_brunniens"  #change to your specie name
+path4 = "~/Bos_grunniens.LU_Bosgru_v3.0.113.fa"  #change to your reference genome
+path5 = "~/sample_id"
+#(1）filtering annotation information：choose the information you really interested in
+cellranger mkgtf $path1 $path2\
+                 --attribute=gene_biotype:protein_coding \
+                 --attribute=gene_biotype:lncRNA \
+                 --attribute=gene_biotype:antiBRse \
+                 --attribute=gene_biotype:miRNA \
+                 --attribute=gene_biotype:IG_LV_gene \
+                 --attribute=gene_biotype:IG_V_gene \
+                 --attribute=gene_biotype:IG_V_pseudogene \
+                 --attribute=gene_biotype:IG_D_gene \
+                 --attribute=gene_biotype:IG_J_gene \
+                 --attribute=gene_biotype:IG_J_pseudogene \
+                 --attribute=gene_biotype:IG_C_gene \
+                 --attribute=gene_biotype:IG_C_pseudogene \
+                 --attribute=gene_biotype:TR_V_gene \
+                 --attribute=gene_biotype:TR_V_pseudogene \
+                 --attribute=gene_biotype:TR_D_gene \
+                 --attribute=gene_biotype:TR_J_gene \
+                 --attribute=gene_biotype:TR_J_pseudogene \
+                 --attribute=gene_biotype:TR_C_gene
+
+#（2） Index of reference genome（0.5h）
+cellranger mkref --genome=$path3 \
+         --fasta=$path4 \
+         --genes=$path2 \
+         --memgb=50 \
+--nthreads=16 \
+
+
+#（3）counts matrix（4h）
+cellranger count --id=$sample_id \ 
+              --transcriptome= $path3 \
+              --fastqs= $path5 \
+              --sample=$sample_id \
+              --localcores=8 \
+              --localmem=64
+
+#Important output folder: ~/sample_id/outs/filtered_feature_bc_matrix
+#Turn to the seurat analysis
+
+#################cell annotated################
+########Rstudio#########
+setwd("/home/xumuserer/HC/sc_sequencing/intestine/small intestine")
+data_paths <- list("si1" = "../si1/filtered_feature_bc_matrix/", 
+                    "si2" = "../si2/filtered_feature_bc_matrix/", 
+                    "si3" = "../si3/filtered_feature_bc_matrix/")
+
+samples <- lapply(names(data_paths), function(name) {
+     seurat_obj <- Read10X(data.dir = data_paths[[name]])
+     rownames(seurat_obj) <- gsub("-", "_", rownames(seurat_obj))
+     seurat_obj <- CreateSeuratObject(counts = seurat_obj, project = name)
+     return(seurat_obj)
+ })
+names(samples) <- c("si1", "si2", "si3")
+
+SI <- merge(scRNAlist[["si1"]],y = c(scRNAlist[["si2"]],scRNAlist[["si3"]]))
+table(SI@meta.data$orig.ident)
+
+SI[["percent.mt"]] <- PercentageFeatureSet(SI, pattern = "^MT-")
+SI <- subset(SI, subset = nFeature_RNA > 200 & nFeature_RNA < 5000 & percent.mt < 20)
+SI <- NormalizeData(small_intestine, normalization.method =  "LogNormalize",  
+                      scale.factor = 1e4)
+GetAssay(SI,assay = "RNA")
+SI <- FindVariableFeatures(SI, 
+                             selection.method = "vst", nfeatures = 2000) 
+SI <- ScaleData(SI)
+SI <- RunPCA(SI)
+SI <- RunHarmony(SI, group.by.vars = "orig.ident")
+print(Embeddings(SI, "pca")[1:5, 1:5])
+SI <- FindNeighbors(SI, dims = 1:25)
+SI <- FindClusters(SI, resolution = 0.6)
+SI = RunUMAP(SI, reduction = "harmony", dims = 1:25)
+Idents(SI_0.6) <- SI_0.6$seurat_clusters
+DimPlot(SI, label = TRUE)
+
+saveRDS(SI, file = "SI_merge_filtered.rds")
+save(SI, file = "SI_merge_filtered.Rdata")
+
+SI <- JoinLayers(SI)
+SI.markers <- FindAllMarkers(SI, only.pos = TRUE,  
+                                     min.pct = 0.25, logfc.threshold = 0.25)
+top_gene <- SI.markers %>% group_by(cluster) %>% top_n(n = 2000, wt = avg_log2FC)
+top_gene=unstack(top_gene, gene ~ cluster)
+names(top_gene)=gsub("X","cluster",names(top_gene))
+write.csv(file="top_SImarker_genes.csv",top_gene,row.names=F)
