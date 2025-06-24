@@ -1,0 +1,196 @@
+#############gwas data and single-cell data preparation##############
+library(scPagwas)
+library(rtracklayer)
+library(dplyr)
+library(Seurat)
+library(patchwork)
+
+SI <- readRDS("sc.RDS")
+
+gtf_df<- rtracklayer::import("./scpagwas/Bos_grunniens.LU_Bosgru_v3.0.113.chr.gtf")
+gtf_df <- as.data.frame(gtf_df)
+gtf_df <- gtf_df[,c("seqnames","start","end","type","gene_name")]
+gtf_df <- gtf_df[gtf_df$type=="gene",]
+block_annotation<-gtf_df[,c(1,2,3,5)]
+colnames(block_annotation)<-c("chrom", "start","end","label")
+block_annotation$chrom <- paste0("chr", block_annotation$chrom)
+
+
+#########LD_file
+plink --file bos_gru --r2 --ld-window-kb 1000 --ld-window-r2 0 --out plink100kb --threads 24 --allow-extra-chr --chr-set 29
+
+#save rds file by chr
+ld <- read.table("./scpagwas/plink100kb.ld", sep = "", header = T)
+lapply(unique(ld$CHR_A), function(i){
+    print(i) 
+    a <- data.table(ld[ld$CHR_A == i,])
+    print(nrow(a)) 
+    if (nrow(a) > 0) {
+        file_name <- paste0("./scpagwas/", i, ".Rds")
+        saveRDS(a, file = file_name)
+    }
+})
+ld <- setNames(ld, paste0("chr", c(1:29)))
+
+####Rstudio processing####
+ld <- read.table("./scpagwas/plink.ld", sep = "", header = T)
+ld1 <- ld
+setDT(ld1)
+ld1[, `:=`(
+    SNP_A = gsub("(\\d+):(\\d+)", "rs\\1\\2", SNP_A),
+    SNP_B = gsub("(\\d+):(\\d+)", "rs\\1\\2", SNP_B)
+)]
+
+lapply(unique(ld1$CHR_A), function(i){
+    a<-data.table(ld1[ld1$CHR_A == i,])
+    file_name <- paste0("./scpagwas/ld/",i,".Rds")
+    saveRDS(a, file = file_name)
+})
+
+ld1<-lapply(as.character(1:29),function(chrom){
+    chrom_ld_file_path <- paste("./scpagwas/ld", '/', chrom, '.Rds', sep = '')
+    ld_data <- readRDS(chrom_ld_file_path)[, .(SNP_A, SNP_B, R2)]
+    return(ld_data)
+})
+
+ld1 <- setNames(ld1, paste0("chr", c(1:29)))
+
+########pathway data#######
+merge_dat <- data.frame()
+for (i in 1:length(Genes_by_pathway_kegg)) {
+    list1 <- data.frame(Genes_by_pathway_kegg[i])
+    list1$group <- names(Genes_by_pathway_kegg[i])
+    names(list1)[1] <- "gene"
+    merge_dat <- rbind(merge_dat, list1)
+}
+
+###Homologous gene mapping 
+pathway <- read.csv("./homologene_bgr_bgt_hum.csv")
+gene_symbols <- getBM(attributes = c("ensembl_gene_id", "external_gene_name"), 
+                      filters = "ensembl_gene_id", 
+                      values = pathway$hsapiens_homolog_ensembl_gene.y, 
+                      mart = mart_human)
+colnames(pathway_with_symbols) <- c("hsa_ensembl", "X", "bgr_gene", "bta_ensembl", "bta_gene", "original_row_order", "hsa_gene")
+head(pathway_with_symbols)
+write.csv(pathway_with_symbols, file = "~/dat/complextraits/scpagwas/bgr_bta_human_homoloygene.csv", row.names = FALSE)
+
+bgr_human_pathway_1 <- bgr_human_pathway[, c("bgr_gene", "group")]
+colnames(bgr_human_pathway_1)
+names(bgr_human_pathway_1) <- c("gene", "group")
+kegg <- split(bgr_human_pathway_1$bgr_gene, bgr_human_pathway_1$group)
+write.csv()
+write.csv(kegg, file = "~/dat/complextraits/scpagwas/kegg.csv", row.names = FALSE)
+
+kegg_long <- data.frame(
+  pathway = rep(names(kegg), lengths(kegg)),
+  gene = unlist(kegg)
+)
+
+###Gwas data preparation
+z <- read.table("/home/xumuserver/mengguangyao/gannan_yak/allsample_joint_snp_filter_pass.vcf" , sep = "\t")
+gwas <- z[,c(1,2,3,8,7,6)]
+names(gwas) <- c("rsid", "chrom","pos","R2", "se","beta")
+##linux##
+plink --file 花生 --freq --out maf --threads 24 --allow-extra-chr --chr-set 29
+awk '{print $2, $5}' maf.frq > maf.csv
+##Rstudio
+maf <- read.table("./scpagwas/maf.csv", header = TRUE, sep = " ")
+maf$SNP <- as.character(maf$SNP)
+gwas$rsid <- as.character(gwas$rsid)
+gwas$MAF <- maf$MAF[match(gwas$rsid, maf$SNP)]
+gwas <- gwas[, c("chrom", "pos", "rsid", "se", "beta", "MAF", "R2")]
+head(gwas)
+write.csv(gwas, file = "./scpagwas/gwas_input.csv", col.names = T)
+
+
+###############Running scPagwas step by step################
+##Single data input##
+Pagwas <- list()
+Pagwas <- Single_data_input(
+          Pagwas = Pagwas,
+          assay = "RNA",
+          Single_data = SI,
+          Pathway_list = kegg1
+  )
+
+##Run pathway pca score##
+Pagwas <- GWAS_summary_input(  
+     Pagwas = Pagwas,  
+     gwas_data = merged_gwas_input2,  
+     maf_filter = 0.1  
+ )
+
+##GWAS summary data input##
+Pagwas <- GWAS_summary_input(  
+     Pagwas = Pagwas,  
+     gwas_data = merged_gwas_input2,  
+     maf_filter = 0.1  
+ )
+
+##Mapping Snps to Genes##
+Pagwas$snp_gene_df <- SnpToGene(
+     gwas_data = Pagwas$gwas_data,
+     block_annotation = block_annotation_clean,
+     marg = 750000
+ )
+
+##Pathway-SNP annotation##
+Pagwas <- Pathway_annotation_input(
+     Pagwas = Pagwas,
+     block_annotation = block_annotation_clean
+ )
+
+##Link the pathway blocks to pca score##
+Pagwas <- Link_pathway_blocks_gwas(
+     Pagwas = Pagwas,
+     chrom_ld = ld1,
+     singlecell = T,
+     celltype = T,
+     backingpath="./temp")
+
+##Perform regression for celltypes##
+Pagwas$lm_results <- Pagwas_perform_regression(Pathway_ld_gwas_data = Pagwas$Pathway_ld_gwas_data)
+Pagwas <- Boot_evaluate(Pagwas, bootstrap_iters = 200, part = 0.5)
+
+##Construct the scPagwas score##
+Pagwas <- scPagwas_perform_score(
+      Pagwas = Pagwas,
+      remove_outlier = TRUE
+    )
+
+##Get the pearson correlation coefficients for gene(PCC)##
+Pagwas$PCC <- scPagwas::scGet_PCC(scPagwas.gPAS.score=Pagwas$scPagwas.gPAS.score,
+                                    data_mat=Pagwas$data_mat)
+
+##Calculate the TRS score for top genes##
+n_topgenes=500
+scPagwas_topgenes <- rownames(Pagwas$PCC)[order(Pagwas$PCC, decreasing = T)[1:n_topgenes]]
+scPagwas_downgenes <- rownames(Pagwas$PCC)[order(Pagwas$PCC, decreasing =F)[1:n_topgenes]]
+
+#Single_data refers to the single-cell data initially inputted.
+
+Single_data <- Seurat::AddModuleScore(SI, assay = "RNA", list(scPagwas_topgenes,scPagwas_downgenes), name = c("scPagwas.TRS.Score","scPagwas.downTRS.Score"))
+
+#Calculate the p-values for scPagwas.TRS.Score of single cells after background correction.
+
+correct_pdf<-Get_CorrectBg_p(Single_data=Single_data,
+                             scPagwas.TRS.Score=Single_data$scPagwas.TRS.Score1,
+                             iters_singlecell=100,
+                             n_topgenes=1000,
+                             assay="RNA",
+                             scPagwas_topgenes=scPagwas_topgenes)
+
+Pagwas$Random_Correct_BG_pdf <- correct_pdf
+
+#Merge the p-values of cells belonging to the same cell type into a single p-value for each cell type.
+Pagwas$Merged_celltype_pvalue<-Merge_celltype_p(single_p=correct_pdf$pooled_p,celltype=Pagwas$Celltype_anno$annotation)
+
+#Integrate and output the results of single-cell analysis.
+a <- data.frame(
+     scPagwas.TRS.Score = Single_data$scPagwas.TRS.Score1,
+    scPagwas.downTRS.Score = Single_data$scPagwas.downTRS.Score2,
+     scPagwas.gPAS.score = Pagwas$scPagwas.gPAS.score,
+     Random_Correct_BG_p = correct_pdf$pooled_p,
+     Random_Correct_BG_adjp = correct_pdf$adj_p,
+     Random_Correct_BG_z = correct_pdf$pooled_z)
+utils::write.csv(a,file = "_singlecell_scPagwas_score_pvalue.Result.csv",quote = F)
