@@ -1,0 +1,61 @@
+report = read.delim('/home/SAHMI/tissue.kraken.report.txt', header = F)
+report$V8 = trimws(report$V8)
+kmer_data = read.table('/home/SAHMI/tissue.sckmer.txt', header = T)
+c = kmer_data %>% 
+    subset(kmer > 1) %>%
+    group_by(taxid) %>%
+    mutate(nn = n()) %>%
+    subset(nn > 3) %>% 
+    group_by(taxid)
+c$name = report$V8[match(c$taxid, report$V7)] 
+paste0(c$barcode,"-1")
+c$barcode_1 <- paste0(c$barcode,"-1")
+head(c)
+metaC <- as.data.frame(c)
+head(metaC)
+microbe_counts <- metaC %>%
+    dplyr::count(name,sort = T)
+head(microbe_counts)
+
+
+barcodes <- metaC$barcode_1[metaC$name == 'Bacillus']
+rawbc_short <- sub("-.*", "", Rec$rawbc)
+barcodes_short <- sub("-.*", "", barcodes)
+match_idx <- match(rawbc_short, barcodes_short)
+Rec$Bacillus_infect <- "Not_detected"
+Rec$Bacillus_infect[which(barcodes_short %in% rawbc_short)] <- "Bacillus-infected"
+umap_df <- as.data.frame(Embeddings(Rec, "umap"))
+umap_df$cell <- rownames(umap_df)
+meta_df <- Rec@meta.data
+meta_df$cell <- rownames(meta_df)
+plot_df <- merge(umap_df, meta_df[, c("cell", "Bacillus_infect")], by = "cell")
+plot_df$Bacillus <- factor(plot_df$Bacillus_infect, levels = c("Not_detected", "Bacillus-infected"))
+bacillus_colors <- c("Not_detected" = "gray80", "Bacillus-infected" = "green")
+umap_df <- as.data.frame(Embeddings(Rec, "umap"))
+umap_df$cell <- rownames(umap_df)
+
+ggplot() +
+    geom_point(data = subset(plot_df, Bacillus_infect == "Not_detected"),
+               aes(x = UMAP_1, y = UMAP_2), color = "gray80", size = 0.5, alpha = 0.5) +
+    geom_point(data = subset(plot_df, Bacillus_infect == "Bacillus-infected"),
+               aes(x = UMAP_1, y = UMAP_2), color = "#f18f01", size = 1.2, stroke = 0.6) +
+    labs(title = "UMAP Highlighting Bacillus-infected Cells") +
+    theme_minimal(base_size = 14) +
+    theme(
+        legend.position = "none",
+        panel.grid = element_blank(),   
+        panel.border = element_rect(color = "black", fill = NA, size = 1),
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 12)
+    )
+
+bacillus_infected_cells <- meta_df %>%
+    filter(Bacillus_infect == "Bacillus-infected")
+table(bacillus_infected_cells$new_celltype)
+
+
+
+
+
+
+
