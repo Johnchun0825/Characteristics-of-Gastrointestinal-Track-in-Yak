@@ -45,20 +45,6 @@ unmapped_fastq_files=("${sampleID}_unmapped.2.fastq.gz" "${sampleID}_unmapped.1.
 index_files="${sampleID}.fa"
 $bwa mem -t 20 "./${index_files[i/2]}" "../../../02_removal_host/${unmapped_fastq_files[i]}" "../../../02_removal_host/${unmapped_fastq_files[i+1]}" | $samtools sort -o "../01_bwa/${index_files[i/2]%%.*}_sorted_paired.bam"
 
-
-
-
-
-
-## megaBat2
-fasta_file="/home/03_assembly_metaSPAdes/scaffolds_total/${sample}_scaffolds.fasta"
-          bam_file="./${sample}_sorted_paired.bam" 
-	  depth_file="./${sample}.txt"
-
-metabat2 -t 22 -i "${fasta_file}" -a "${depth_file}" -o /home/xumuserver/HC/matagenomics/04_bining/metaSPAdes/02_metabwa/${sample}
-
-
-
 ## maxBin2
 fasta_file="/home/xumuserver/HC/matagenomics/03_assembly_metaSPAdes/scaffolds_total/${sample}_scaffolds.fasta"
 	  read1_file="/home/xumuserver/HC/matagenomics/02_removal_host/${sample}_unmapped.1.fastq.gz"
@@ -67,6 +53,93 @@ fasta_file="/home/xumuserver/HC/matagenomics/03_assembly_metaSPAdes/scaffolds_to
           depth_file="/home/xumuserver/HC/matagenomics/04_bining/metaSPAdes/03_all_binning/01_abound/${sample}.txt"
           
 run_MaxBin.pl -min_contig_length 1000 -thread 20 -contig "${fasta_file}" -abund "${depth_file}" -out ./02_bins/${sample}
+
+## megaBat2
+fasta_file="/home/03_assembly_metaSPAdes/scaffolds_total/${sample}_scaffolds.fasta"
+          bam_file="./${sample}_sorted_paired.bam" 
+	  depth_file="./${sample}.txt"
+
+metabat2 -t 22 -i "${fasta_file}" -a "${depth_file}" -o /home/xumuserver/HC/matagenomics/04_bining/metaSPAdes/02_metabwa/${sample}
+
+### CheckM
+checkm lineage_wf -t 20 -x /home/04_bining/metaSPAdes/03_all_binning/02_bins/fasta --nt --tab_table -f bins_qa.txt metabat_bins bins_qa_result
+
+### Taxonomic annotation for MAGs ###
+## dRep
+drep=~/bin/drep
+bins=./all_bins/
+gtdbtk=~/bin/gtdbtk
+
+mkdir -p ./05_drep/
+
+${drep} dereplicate ./05_drep/ \
+	-p 40 \
+	-comp 80 \
+	-con 10 \
+	-str 100 \
+	-strW 0 \
+	-g ${bins}*.fa
+
+## GTDB-TK
+mkdir -p ./06_GTDB-TK/
+gtdbtk classify_wf --genome_dir ./05_drep/dereplicated_genomes/ \
+	-x fa \
+	--out_dir ./06_GTDB-TK/ \
+	--cpus 40
+
+### Functional annotation ###
+prodigal=~/bin/prodigal
+MAGs=./05_drep/dereplicated_genomes/
+cdhit=~/bin/cd-hit
+eggnog=./eggNOG-mapper/emapper.py
+eggnog_db=./eggNOG-mapper/data/eggnog.db
+dbcan2=./dbCAN2/Tools/run_dbcan/run_dbcan.py
+dbcan2_db=./dbCAN2/Tools/run_dbcan/db/
+
+mkdir -p ./prodigal/
+
+${prodigal} -i ${MAGs}/${MAGsID}.fa \
+	-o prodigal/${MAGsID}.gff \
+	-a prodigal/${MAGsID}.faa \
+	-d prodigal/${MAGsID}.fna
+
+mkdir -p ./cdhit/
+#merge all proteins
+cat ./prodigal/*.faa > ./cdhit/proteins.fa
+${cdhit} -i ./cdhit/proteins.fa -o ./cdhit/proteins95 -c 0.95 -n 5 -M 16000 -d 0 -T 8
+
+mkdir ./eggnog/
+cd ./eggnog/
+
+python ../../Scripts/format_fasta_1line.py ../cdhit/proteins95 ./proteins1line.fa
+
+split -l 50000 -a 4 -d ./proteins1line.fa ./proteins1line.chunk_
+
+time parallel -j 4 --xapply \
+	  'python ${eggnog} -m diamond --no_annot --no_file_comments --cpu 10 -i {1} -o {1}' \
+	   ::: proteins1line.chunk_*
+
+cat *.chunk_*.emapper.seed_orthologs > proteins.emapper.seed_orthologs
+cp ${eggnog_db} /dev/shm
+
+python ${eggnog} -annotate_hits_table proteins.emapper.seed_orthologs \
+	--no_file_comments \
+	-o eggnog_output \
+	--cpu 40 \
+	--data_dir /dev/shm \
+	--override
+
+mkdir -p ./dbCAN2/
+python ${dbcan2} ./cdhit/proteins95 protein \
+	--out_dir ./dbCAN2/ \
+	--db_dir -t diamond \
+	--dia_cpu 10
+
+
+
+
+
+
 
 
 
