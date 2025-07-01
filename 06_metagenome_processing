@@ -1,7 +1,72 @@
-### Remove adapter and low quality sequnce by trimmomatic
+#!/bin/bash
+
+
+### Remove adapter and low quality sequnce by trimmomatic ###
 Trimmomatic=~/bin/trimmomatic-0.35.jar
+mkdir -p ./01_CleanData/
+java -jar ${Trimmomatic} PE -threads 10 \
+	-trimlog ${CleanData}/${sampleID}.logfile \
+	${Rawdata}/${sampleID}_R1.fq.gz \
+	${Rawdata}/${sampleID}_R2.fq.gz \
+	01_CleanData/${sampleID}_clean_R1.fq \
+	01_CleanData/${sampleID}_clean_unpaired_R1.fq \
+	01_CleanData/${sampleID}_clean_R2.fq \
+	01_CleanData/${sampleID}_clean_unpaired_R2.fq \
+	ILLUMINACLIP:${adapters}:2:30:10  SLIDINGWINDOW:15:30 MINLEN:110 TRAILING:30 AVGQUAL:30
+
+### Remove host sequence ###
+mkdir -p ./02_Removed_Host/
+index="./yak_index"
+bowtie2 --very-sensitive -p 20 -q -x ${index} \
+        -1 ${sample1} \
+        -2 ${sample2} \
+        --un-conc-gz ../matagenomics/02_removal_host/${sampleID}_unmapped.fq \
+        --al-conc-gz ../matagenomics/02_removal_host/${sampleID}_mapped.fq
+
+### Assembly and binning ###
+## metaSPAdes
+mkdir -p ./03_assembly_metaSPAdes/
+metaspades.py -1 ${sample1} \
+                        -2 ${sample2} \
+                  -k 21,31,41,51,61,71,81,91,101,111,121 \
+                  -t 10 \
+                  -o ./03_assembly_metaSPAdes/${sampleID}
+
+## megaHit
+megahit -1 "${input_dir}/${sample}_unmapped.1.fastq.gz" \
+        -2 "${input_dir}/${sample}_unmapped.2.fastq.gz" \
+        --min-contig-len 1000 
+         -t 20 \
+         -o "${output_base_dir}/${sample}"
+
+bwa="/home/xumuserver/miniconda3/envs/sharesoft/bin/bwa"
+samtools="/home/xumuserver/miniconda3/envs/sharesoft/bin/samtools"
+unmapped_fastq_files=("${sampleID}_unmapped.2.fastq.gz" "${sampleID}_unmapped.1.fastq.gz")
+index_files="${sampleID}.fa"
+$bwa mem -t 20 "./${index_files[i/2]}" "../../../02_removal_host/${unmapped_fastq_files[i]}" "../../../02_removal_host/${unmapped_fastq_files[i+1]}" | $samtools sort -o "../01_bwa/${index_files[i/2]%%.*}_sorted_paired.bam"
 
 
+
+
+
+
+## megaBat2
+fasta_file="/home/03_assembly_metaSPAdes/scaffolds_total/${sample}_scaffolds.fasta"
+          bam_file="./${sample}_sorted_paired.bam" 
+	  depth_file="./${sample}.txt"
+
+metabat2 -t 22 -i "${fasta_file}" -a "${depth_file}" -o /home/xumuserver/HC/matagenomics/04_bining/metaSPAdes/02_metabwa/${sample}
+
+
+
+## maxBin2
+fasta_file="/home/xumuserver/HC/matagenomics/03_assembly_metaSPAdes/scaffolds_total/${sample}_scaffolds.fasta"
+	  read1_file="/home/xumuserver/HC/matagenomics/02_removal_host/${sample}_unmapped.1.fastq.gz"
+	  read2_file="/home/xumuserver/HC/matagenomics/02_removal_host/${sample}_unmapped.2.fastq.gz"
+          bam_file="/home/xumuserver/HC/matagenomics/04_bining/metaSPAdes/01_bwa/${sample}_sorted_paired.bam"
+          depth_file="/home/xumuserver/HC/matagenomics/04_bining/metaSPAdes/03_all_binning/01_abound/${sample}.txt"
+          
+run_MaxBin.pl -min_contig_length 1000 -thread 20 -contig "${fasta_file}" -abund "${depth_file}" -out ./02_bins/${sample}
 
 
 
