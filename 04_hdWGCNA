@@ -1,0 +1,100 @@
+wgcna <- SetupForWGCNA(
+    iri.integrated,
+    gene_select = "fraction",
+    fraction = 0.05,
+    wgcna_name = "all_tissues"
+)
+wgcna <- MetacellsByGroups(
+    seurat_obj = wgcna,
+    group.by = c("new_celltype", "group"), #指定seurat_obj@meta.data中要分组的列
+    reduction = 'harmony', # 选择要执行KNN的降维
+    k = 25, # 最近邻居参数
+    max_shared = 10, # 两个metacell之间共享细胞的最大数目
+    ident.group = 'group' # 设置metacell安全对象的标识
+)
+wgcna <- NormalizeMetacells(wgcna)
+wgcna <- SetDatExpr(
+    wgcna,
+    group_name = c("Abomasum", "colon", "Duodenum", 
+                   "ileum", "Omasum", "Rectum", 
+                   "Reticulum", "Rumen"), # the name of the group of interest in the group.by column
+    group.by="group", # the metadata column containing the cell type info. This same column should have also been used in MetacellsByGroups
+    assay = "RNA", # using RNA assay
+    slot = "data" # using normalized data
+)
+wgcna <- TestSoftPowers(
+    wgcna,
+    networkType = 'signed' # you can also use "unsigned" or "signed hybrid"
+)
+
+# plot the results:
+plot_list <- PlotSoftPowers(wgcna)
+
+# assemble with patchwork
+wrap_plots(plot_list, ncol=2)
+
+wgcna <- ConstructNetwork(
+    wgcna,
+    soft_power = 7,
+    setDatExpr = FALSE,
+    tom_name = 'INH'
+)
+PlotDendrogram(wgcna, main='Treg hdWGCNA Dendrogram')
+
+TOM <- GetTOM(wgcna)
+wgcna <- ScaleData(wgcna, features = VariableFeatures(wgcna))
+wgcna <- ModuleEigengenes(
+    wgcna,
+    group.by.vars="group"
+)
+hMEs <- GetMEs(wgcna)
+# module eigengenes:
+MEs <- GetMEs(wgcna, harmonized=FALSE)
+wgcna <- ModuleConnectivity(
+  wgcna,
+  group.by = 'group', 
+  group_name = c("Abomasum", "colon", "Duodenum", 
+                   "ileum", "Omasum", "Rectum", 
+                   "Reticulum", "Rumen")
+)
+modules <- GetModules(wgcna) %>% 
+  subset(module != 'grey')
+
+head(modules[,1:6])
+hub_df <- GetHubGenes(wgcna, n_hubs = 10)
+head(hub_df)
+
+## compute gene scoring for the top 25 hub genes by kME for each module
+wgcna <- ModuleExprScore(
+  wgcna,
+  n_genes = 25,
+  method='Seurat' # Seurat方法(AddModuleScore)
+)
+
+ModuleNetworkPlot(
+    wgcna, 
+    outdir='/home/xumuserver/HC/sc_sequencing/cross_species/hdWGCNA/ModuleNetworks', # new folder name
+    n_inner = 20, # number of genes in inner ring
+    n_outer = 30, # number of genes in outer ring
+    n_conns = Inf, # show all of the connections
+    plot_size=c(10,10), # larger plotting area
+    vertex.label.cex=1 # font size
+)
+
+wgcna <- RunModuleUMAP(
+  wgcna,
+  n_hubs = 10, # number of hub genes to include for the UMAP embedding
+  n_neighbors=15, # neighbors parameter for UMAP
+  min_dist=0.1# min distance between points in UMAP space
+)
+
+# get the hub gene UMAP table from the seurat object
+umap_df <- GetModuleUMAP(wgcna)
+
+# plot with ggplot
+ggplot(umap_df, aes(x=UMAP1, y=UMAP2)) +
+  geom_point(
+   color=umap_df$color, # color each point by WGCNA module
+   size=umap_df$kME*2# size of each point based on intramodular connectivity
+  ) +
+  umap_theme()
