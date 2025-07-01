@@ -1,0 +1,103 @@
+library(WGCNA)
+
+meba_clean <- meba[, !(colnames(meba) %in% c("ID", grep("QC", colnames(meba), value = TRUE))]
+samples <- colnames(meba_clean)[-1]
+groups <- substr(samples, 1, 3)
+sample_info <- data.frame(
+  sample = samples,
+  group = groups,
+  type = groups
+)
+rownames(meba_clean) <- meba_clean$name
+meba_clean$name <- NULL
+data <- t(meba_clean)
+data_df <- as.data.frame(data)
+data_df$type <- sample_info$type[match(rownames(data_df), sample_info$sample)]
+powers = c(1:10, seq(12, 20, 2))
+data_numeric <- data_df[, !colnames(data_df) %in% "type"]
+SoftThreshold = pickSoftThreshold(data_numeric, powerVector = powers, verbose = 5)
+par(mfrow = c(1, 2))
+plot(SoftThreshold$fitIndices[, 1], 
+     -sign(SoftThreshold$fitIndices[, 3]) * SoftThreshold$fitIndices[, 2],
+     xlab = "Soft Threshold (power)", ylab = "Scale Free Topology Model Fit (R²)",
+     type = "n", main = "Scale Independence")
+text(SoftThreshold$fitIndices[, 1], 
+     -sign(SoftThreshold$fitIndices[, 3]) * SoftThreshold$fitIndices[, 2],
+     labels = powers, cex = 0.9, col = "red")
+plot(SoftThreshold$fitIndices[, 1], SoftThreshold$fitIndices[, 5],
+     xlab = "Soft Threshold (power)", ylab = "Mean Connectivity",
+     type = "n", main = "Mean Connectivity")
+text(SoftThreshold$fitIndices[, 1], SoftThreshold$fitIndices[, 5],
+     labels = powers, cex = 0.9, col = "red")
+power_value <- 14
+net = blockwiseModules(
+    data_numeric,
+    power = power_value,
+    maxBlockSize = 5000,
+    TOMType = "unsigned",
+    minModuleSize = 300,
+    reassignThreshold = 0,
+    mergeCutHeight = 0.25,
+    numericLabels = TRUE,
+    pamRespectsDendro = FALSE,
+    saveTOMs = TRUE,
+    saveTOMFileBase = "metaboliteTOM",
+    verbose = 3
+)
+moduleColors = labels2colors(net$colors)
+plotDendroAndColors(
+  net$dendrograms[[1]],
+  moduleColors[net$blockGenes[[1]]],
+  "Module colors",
+  dendroLabels = FALSE,
+  hang = 0.03,
+  addGuide = TRUE,
+  guideHang = 0.05
+)
+design = model.matrix(~0 + data_df$type)
+colnames(design) = levels(as.factor(data_df$type))
+MEs0 = moduleEigengenes(data_numeric, moduleColors)$eigengenes
+MEs = orderMEs(MEs0)
+moduleTraitCor = cor(MEs, design, use = "p")
+moduleTraitPvalue = corPvalueStudent(moduleTraitCor, nrow(data_numeric))
+textMatrix = paste(signif(moduleTraitCor, 2), "\n(",
+                   signif(moduleTraitPvalue, 1), ")", sep = "")
+labeledHeatmap(
+  Matrix = moduleTraitCor,
+  xLabels = colnames(design),
+  yLabels = names(MEs),
+  ySymbols = names(MEs),
+  colorLabels = FALSE,
+  colors = blueWhiteRed(50),
+  textMatrix = textMatrix,
+  setStdMargins = FALSE,
+  cex.text = 0.7,
+  zlim = c(-1, 1),
+  main = "Module-Trait Relationships"
+)
+nSamples = nrow(data_numeric)
+geneModuleMembership = as.data.frame(cor(data_numeric, MEs, use = "p"))
+MMPvalue = as.data.frame(corPvalueStudent(as.matrix(geneModuleMembership), nSamples))
+geneSignificance = as.data.frame(cor(data_numeric, design, use = "p"))
+GSPvalue = as.data.frame(corPvalueStudent(as.matrix(geneSignificance), nSamples))
+module = "brown"
+column = match(paste0("ME", module), names(MEs))
+moduleMetabolites = names(data_numeric)[moduleColors == module]
+module_results = data.frame(
+    Metabolite = colnames(data_numeric),
+    Module = moduleColors,
+    ModuleLabel = net$colors
+)
+write.csv(module_results, "/home/xumuserver/HC/sc_sequencing/cross_species/metabololic/metabolite_modules.csv", row.names = FALSE)
+trait_results = data.frame(
+    Module = rownames(moduleTraitCor),
+    moduleTraitCor,
+    moduleTraitPvalue
+)
+write.csv(trait_results, "/home/xumuserver/HC/sc_sequencing/cross_species/metabololic/module_trait_correlations.csv", row.names = FALSE)
+
+
+
+
+
+
