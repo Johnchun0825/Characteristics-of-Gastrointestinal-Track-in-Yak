@@ -1,3 +1,34 @@
+#### PCA ####
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+data=read.csv("home/metabolomics/metabolome.csv")
+data <- t(data)  
+pca_data <- prcomp(data)
+screeplot(pca_data, type = "lines")
+summary(pca_data)
+rownames(pca_data$x)
+x_per <- round(summary(pca_data)$importance[2, 1]*100, 1)
+y_per <- round(summary(pca_data)$importance[2, 2]*100, 1)
+metabolome_pca <- data.frame(name=rownames(pca_data$x), pca_data$x) %>%
+  left_join(group, by = "name")
+ggplot(data=metabolome_pca, 
+             aes(x=PC1,y=PC2,fill= species,colour=species)) + 
+  geom_point(aes(color=species),size=3)+
+  geom_hline(aes(yintercept=0), linetype=3) + 
+  geom_vline(aes(xintercept=0), linetype=3) +  
+  stat_ellipse(aes(fill = group), geom = 'polygon', level = 0.95, alpha = 0.1, show.legend = FALSE) + 
+  theme_test()
+
+#### OPLS-DA ####
+oplsda <- opls(data, group, predI = 1, orthoI = NA)
+vip <- getVipVn(oplsda)
+vip<-data.frame(vip)
+data_vip <- merge(data, vip, by="row.names", all=T) 
+data_vip$Foldchange<-data_vip$species1_mean/data_vip$species2_mean
+data_vip$LOG2FC<-log2(data_vip$Foldchange)
+
+#### WGCNA ####
 library(WGCNA)
 
 meba_clean <- meba[, !(colnames(meba) %in% c("ID", grep("QC", colnames(meba), value = TRUE))]
