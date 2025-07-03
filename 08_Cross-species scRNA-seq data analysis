@@ -1,0 +1,274 @@
+cow <- readRDS("/home/cross_species/cow_data/GSE176512_Ten_tissues_cells_Rdata.rds")
+Idents(cow) <- "orig.ident"
+cow <- cow[, Idents(cow) %in% c("Abomasum_AD", "Ileum_AD", "Omasum_AD", "Rectum_AD", "Reticulum_AD", "Rumen_AD_1", "Rumen_AD_2", "Rumen_AD_3")]
+cow@meta.data <- cow@meta.data %>%
+      mutate(group = str_extract(orig.ident, "^[^_]+"))
+
+Idents(iri.integrated) <- "group"
+yak <- iri.integrated[, Idents(iri.integrated) %in% c("Abomasum", "ileum", "Omasum", "Rectum", "Reticulum", "Rumen")]
+
+cow <- rename_genes(cow, homologs, "cow_gene")
+yak <- rename_genes(yak, homologs, "yak_gene")
+
+Merge <- merge(yak, y = cow, project = "Merge")
+
+species.list <- SplitObject(Merge, split.by = "species")
+species.list <- lapply(X = species.list, FUN = function(x) {
+    x <- NormalizeData(x)
+    x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+})
+features <- SelectIntegrationFeatures(object.list = species.list)
+species.list <- lapply(X = species.list, FUN = function(x) {
+    x <- ScaleData(x, features = features, verbose = FALSE)
+    x <- RunPCA(x, features = features, verbose = FALSE)
+})
+
+species.anchors <- FindIntegrationAnchors(object.list = species.list, anchor.features = features, reduction = "rpca")
+
+species.combined <- IntegrateData(anchorset = species.anchors)
+DefaultAssay(species.combined) <- "integrated"
+species.combined <- ScaleData(species.combined, verbose = FALSE)
+species.combined <- RunPCA(species.combined, npcs = 30, verbose = FALSE)
+species.combined <- RunTSNE(species.combined, reduction = "pca", dims = 1:20,check_duplicates=F)
+species.combined <- FindNeighbors(species.combined, reduction = "pca", dims = 1:20)
+species.combined <- FindClusters(species.combined, resolution = 0.4)
+
+###Plot by species_tsne ####
+plot_data <- species.combined@meta.data %>%
+    dplyr::select(tSNE_1, tSNE_2, group) %>%
+    dplyr::mutate(group = factor(group))  # 确保分组为因子类型
+
+combine_colors <- c(
+    "Rumen" = "#f7d7d8",
+    "Reticulum" = "#f89bb8",
+    "Omasum" = "#ffd920",
+    "Abomasum" = "#ffe88c",
+    "Ileum" = "#42ce8f", 
+    "Cec" = "#3e8bd8",
+    "Rectum" = "#c9a5d3"
+)
+P_combined_tissues_tSNE <- ggplot(plot_data, aes(x = tSNE_1, y = tSNE_2)) +
+    geom_point_rast(
+        aes(color = group), 
+        size = 0.4,
+        stroke = 0,
+        shape = 16,
+        raster.dpi = 600
+    ) +
+    scale_color_manual(
+        name = "Group",
+        values = combine_colors
+    ) +
+    guides(
+        color = guide_legend(
+            override.aes = list(size = 3) 
+        )
+    ) +
+    tidydr::theme_dr(
+        xlength = 0.2,
+        ylength = 0.2,
+        arrow = arrow(length = unit(0.2, "inches"), type = "closed")
+    ) +
+    theme(
+        axis.title = element_blank(),
+        panel.background = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.background = element_blank(),
+        legend.background = element_blank(),
+        legend.title = element_text(size = 12, face = "bold"),
+        legend.text = element_text(size = 10, face = "bold"),  # 标签大小保持不变
+        axis.ticks = element_blank(),
+        axis.text = element_blank()
+    )
+
+####Plot for cell counts and percent ##########
+cellcounts <- species.combined@meta.data %>%
+    dplyr::select(species, group) %>%
+    dplyr::group_by(species, group) %>%
+    dplyr::summarise(cellcounts = n(), .groups = "drop")
+
+total_by_group <- cellcounts %>%
+  group_by(group) %>%
+  summarise(total = sum(cellcounts))
+
+cellcounts_percent <- cellcounts %>%
+  left_join(total_by_group, by = "group") %>%
+  mutate(percent = cellcounts / total)
+
+group_order <- c("Rum", "Ret", "Oma", "Abo", "Ile", "Rec")
+
+cellcounts_percent <- cellcounts_percent %>%
+  mutate(
+    group_short = case_when(
+      group == "Rumen"     ~ "Rum",
+      group == "Reticulum" ~ "Ret",
+      group == "Omasum"    ~ "Oma",
+      group == "Abomasum"  ~ "Abo",
+      group == "Ileum"     ~ "Ile",
+      group == "Rectum"    ~ "Rec"
+    ),
+    group_short = factor(group_short, levels = rev(group_order)) 
+  )
+p_percent <- ggplot(cellcounts_percent, aes(x = percent, y = group_short, fill = species)) +
+  geom_col(position = "fill", width = 0.7) +
+  scale_x_continuous(
+    labels = percent_format(),
+    expand = c(0, 0)
+  ) +
+  scale_fill_manual(values = species_colors) + 
+  labs(x = "Percentage", y = "Group", fill = "Species") +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    axis.line = element_line(size = 1, color = "black"),
+    axis.text.x = element_text(size = 12, face = "bold"),
+    axis.text.y = element_text(size = 14, face = "bold"),
+    axis.title.x = element_text(size = 12, face = "plain"),
+    axis.title.y = element_text(size = 12, face = "plain"),
+    legend.position = "top"
+  )
+
+total_by_group <- total_by_group %>%
+    mutate(
+        group_short = case_when(
+            group == "Rumen"     ~ "Rum",
+            group == "Reticulum" ~ "Ret",
+            group == "Omasum"    ~ "Oma",
+            group == "Abomasum"  ~ "Abo",
+            group == "Ileum"     ~ "Ile",
+            group == "Rectum"    ~ "Rec"
+        ),
+        group_short = factor(group_short, levels = rev(group_order)) 
+    )
+
+combine_colors <- c(
+    "Rum" = "#f7d7d8",
+    "Ret" = "#f89bb8",
+    "Oma" = "#ffd920",
+    "Abo" = "#ffe88c",
+    "Ile" = "#42ce8f",  
+    "Cec" = "#3e8bd8",
+    "Rec" = "#c9a5d3"
+)
+
+p_total <- ggplot(total_by_group, aes(x = total, y = group_short, fill = group_short)) +  # 按 group_short 填色
+    geom_col(width = 0.7) +
+    scale_x_continuous(expand = c(0, 0)) + 
+    scale_fill_manual(values = combine_colors) + 
+    labs(x = "Total Cell Count", y = NULL) +
+    theme_minimal() +
+    theme(
+        panel.grid = element_blank(),
+        axis.line.x = element_line(size = 1, color = "black"), 
+        axis.text.x = element_text(size = 12, face = "bold"),
+        axis.title.x = element_text(size = 12, face = "plain"),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        legend.position = "none"
+    )
+
+print(p_total)
+
+### MetaNeighbor ###
+cow1 <- cow
+yak1 <- yak 
+DefaultAssay(cow1) <- 'RNA'
+cow1@meta.data$species <- 'cow'
+DefaultAssay(yak1) <- 'RNA'
+yak1@meta.data$species <- 'yak'
+Idents(cow1) <- cow1@meta.data$celltypes
+Idents(yak1) <- yak1@meta.data$new_celltype
+exprs_cow <- GetAssayData(cow1)
+exprs_yak <- GetAssayData(yak1)
+common_genes <- intersect(rownames(exprs_cow), rownames(exprs_yak))
+exprs_cow_common <- exprs_cow[common_genes, ]
+exprs_yak_common <- exprs_yak[common_genes, ]
+combined_exprs <- cbind(exprs_cow_common, exprs_yak_common)
+new_colData <- data.frame(
+     study_id = c(rep('cow', ncol(exprs_cow_common)), rep('yak', ncol(exprs_yak_common))),
+     cell_type = c(Idents(cow1), Idents(yak1))
+ )
+sce_combined <- SingleCellExperiment(
+     assays = list(RNA = combined_exprs),
+     colData = new_colData
+ )
+sce_combined                          
+
+var_genes <- variableGenes(dat = sce_combined, exp_labels = sce_combined$study_id)
+celltype_similarity <- MetaNeighborUS(
+     var_genes = var_genes,
+     dat = sce_combined,
+     study_id = sce_combined$study_id,
+     cell_type = sce_combined$cell_type,
+     fast_version = TRUE
+ )
+
+#### cross-species correlations ####
+homologs <- homologs_clean %>% 
+  distinct(yak_gene, cow_gene) %>% 
+  na.omit()
+common_genes <- homologs %>%
+  filter(yak_gene %in% rownames(yak),
+         cow_gene %in% rownames(cow))
+yak <- subset(yak, features = common_genes$yak_gene)
+cow <- subset(cow, features = common_genes$cow_gene)
+yak <- subset(yak, features = common_genes$yak_gene)
+cow <- subset(cow, features = common_genes$cow_gene)
+rownames(yak) <- common_genes$yak_gene
+rownames(cow) <- common_genes$cow_gene
+
+yak_avg <- AverageExpression(yak,
+                             assays = 'RNA',
+                             group.by = 'final_celltype')$RNA
+colnames(yak_avg) <- paste0("yak_", colnames(yak_avg))
+
+cow_avg <- AverageExpression(cow,
+                             assays = 'RNA', 
+                             group.by = 'final_celltype')$RNA
+colnames(cow_avg) <- paste0("cow_", colnames(cow_avg))
+yak_markers <- COSG::cosg(yak,
+                           groups = 'all',
+                           assay = 'RNA',
+                           n_genes_user = 20)$names %>%
+     unlist() %>% 
+     unique()
+
+ cow_markers <- COSG::cosg(cow,
+                           groups = 'all',
+                           assay = 'RNA',
+                           n_genes_user = 20)$names %>% 
+     unlist() %>%
+     unique()
+common_markers <- unique(c(
+     common_genes$cow_gene[match(yak_markers, common_genes$yak_gene)],
+     cow_markers
+ )) %>% na.omit()
+valid_markers <- intersect(
+     intersect(common_markers, rownames(cow_avg)),
+     intersect(common_markers, rownames(yak_avg))
+ )
+
+cor_matrix <- cor(cow_avg[valid_markers, ],
+                   yak_avg[valid_markers, ],
+                   method = "pearson")
+View(cor_matrix)
+
+####species-specific TFs####
+cow_cellInfo <- cow@meta.data[,c("celltype","nCount_RNA","nFeature_RNA")]
+colnames(cow_cellInfo) <- c('CellType', 'nGene' ,'nUMI')
+head(cow_cellInfo)
+write.csv(cow_cellInfo, file = "/home/xumuserver/HC/sc_sequencing/cross_species/cow_cellInfo.csv")
+
+pyscenic grn --num_workers 50 --method grnboost2 --output ./cow_data/cow_sce.adj.csv cow_sce.loom /home/db/allTFs_hg38.txt
+pyscenic ctx --num_workers 45 --output cow_sce.regulons.csv --expression_mtx_fname cow_sce.loom --all_modules --mask_dropouts --mode "dask_multiprocessing" --annotations_fname /home/xumuserver/HC/sc_sequencing/intestine/small_intestine/db/motifs-v9-nr.hgnc-m0.001-o0.0.tbl cowc_sce.adj.csv /home/xumuserver/HC/sc_sequencing/intestine/small_intestine/db/hg38__refseq-r80__10kb_up_and_down_tss.mc9nr.genes_vs_motifs.rankings.feather
+pyscenic aucell --num_workers 40 --output cow_sce_SCENIC.loom cow_sce.loom cow_sce.regulons.csv
+
+
+
+
+
+
+
+
+
