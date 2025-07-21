@@ -1,0 +1,85 @@
+#######################
+########-scFEA-########
+#######################
+###The single-cell data from yak should initially undergo conversion to their human homologous genes.
+library(Seurat)
+yak <-readRDS("./yak.rds")
+yak <- as.matrix(yak@assays$RNA@counts)
+write.csv(yak, file = "./scFEA_Sample.csv")
+
+python src/scFEA.py --data_dir data --input_dir input/ \
+                    --test_file scFEA_Sample.csv \
+                    --moduleGene_file module_gene_m168.csv \
+                    --stoichiometry_matrix cmMat_c70_m168.csv \
+                    --res_dir output \
+                    --sc_imputation True
+
+
+#################################################
+########-Single-Cell-Metabolic-Landscape-########
+#################################################
+library(stringr)
+library(reshape2)
+library(scales)
+library(scater)
+library(pheatmap)
+library(ggplot2)
+library(dplyr)
+library(ggrepel)
+library(RColorBrewer)
+library(rjson)
+
+yak <-readRDS("./Yak.rds")
+yak$newcelltype <- paste0(yak$tissue,"_", yak$celltype)
+all_cell_types <- as.vector(Sample$newcelltype)
+cell_types <- unique(all_cell_types)
+metabolism_activaty <- Pathway_act_Score(yak,
+                                         pathways=pathways,
+                                         assay = "RNA",
+                                         filterGene=T,
+                                         Mean_cut = 0.001,
+                                         percent_cut =0.1,
+                                         all_cell_types = all_cell_types,
+                                         cell_types = cell_types)
+
+data <- metabolism_activaty[[1]]
+all_NA <- rowAlls(is.na(data))
+data <- data[!all_NA,]
+
+KEGG_pathway <- rjson::fromJSON(file = "./br08901.json",simplify=F)
+KEGG_pathway <- KEGG_pathway[[2]]
+KEGG_pathway <- KEGG_pathway[[1]]
+KEGG_pathway <- KEGG_pathway[[2]]
+
+cate1 <- c()
+for (i in 1:length(KEGG_pathway)) {
+  length_names <- length(KEGG_pathway[[i]][[2]])
+  cate1 <- append(cate1, rep(KEGG_pathway[[i]][[1]], length_names))
+   }
+ 
+cate2 <- c()
+for (i in 1:length(KEGG_pathway)) {
+  cate2 <- append(cate2, KEGG_pathway[[i]][[2]])
+  }
+
+cate3 <- c()
+for (i in 1:length(cate2)) {
+   cate3 <- append(cate3, as.character(cate2[[i]]))
+  }
+
+vec = cate3
+vec <- str_replace(vec, "[0-9]+", "")
+vec <- str_replace(vec, "  ", "")
+KEGG_pathways_Metabolism_anno <- data.frame(cat1  = cate1,
+                                        cat2  = cate3,
+                                        vec  = vec)
+ 
+rownames(KEGG_pathways_Metabolism_anno) <- KEGG_pathways_Metabolism_anno$vec
+Anno_pathway <- KEGG_pathways_Metabolism_anno[rownames(data),]
+data$pathway_anno <- Anno_pathway$directory2
+data$pathway <- rownames(data)
+melt_data = melt(data,
+                id.vars = c("pathway","pathway_anno"),
+                measure.vars = 1:(length(data)-2),
+                variable.name = c('celltype'),
+                value.name = 'score')                    
