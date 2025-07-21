@@ -1,1 +1,90 @@
+import os,sys
+import scanpy as sc
+import pandas as pd
+import numpy as np
+from matplotlib import pyplot as plt
+import seaborn as sns
+from mebocost import mebocost
+
+adata = sc.read_h5ad('./scRNA_ha.h5ad')
+sc.pl.umap(adata,color=["celltype"],frameon=False,ncols=1,)
+
+mebo_obj = mebocost.create_obj(
+                        adata = adata,
+                        group_col = ['celltype'],
+                        met_est = 'mebocost',
+                        config_path = './MEBOCOST/mebocost.conf',
+                        exp_mat=None,
+                        cell_ann=None,
+                        species='human',
+                        met_pred=None,
+                        met_enzyme=None,
+                        met_sensor=None,
+                        met_ann=None,
+                        scFEA_ann=None,
+                        compass_met_ann=None,
+                        compass_rxn_ann=None,
+                        cutoff_exp='auto',
+                        cutoff_prop=0.25,
+                        sensor_type=['Receptor', 'Transporter', 'Nuclear Receptor'],
+                        thread=8)
+
+commu_res = mebo_obj.infer_commu(
+                                n_shuffle=1000,
+                                seed=12345, 
+                                Return=True, 
+                                save_permuation=False,
+                                min_cell_number = 10,
+                                pval_method='permutation_test_fdr',
+                                pval_cutoff=0.05)
+
+mebo_obj.eventnum_bar(
+                    sender_focus=[],
+                    metabolite_focus=[],
+                    sensor_focus=[],
+                    receiver_focus=[],
+                    xorder=[],
+                    and_or='and',
+                    pval_method='permutation_test_fdr',
+                    pval_cutoff=0.05,
+                    comm_score_col='Commu_Score',
+                    comm_score_cutoff = 0,
+                    cutoff_prop = 0.25,
+                    figsize=(5, 3.5),
+                    save=None,
+                    show_plot=True,
+                    show_num = True,
+                    include=['sender-receiver'],
+                    group_by_cell=True,
+                    colorcmap=["#8AAD05", "#DF5D22"],
+                    return_fig=False
+                )
+
+mebo_obj.FlowPlot(
+                pval_method='permutation_test_fdr',
+                pval_cutoff=0.05,
+                sender_focus=[],
+                metabolite_focus=[],
+                sensor_focus=[],
+                receiver_focus=[],
+                remove_unrelevant = False,
+                and_or='and',
+                node_label_size=8,
+                node_alpha=0.6,
+                figsize='auto',
+                node_cmap='Set1',
+                line_cmap='YlGnBu',#颜色设置
+                line_cmap_vmin = None,
+                line_cmap_vmax = 15.5,
+                node_size_norm=(20, 150),
+                node_value_range = None,
+                linewidth_norm=(0.5, 5),
+                linewidth_value_range = None,
+                save='test.pdf',
+                show_plot=True,
+                comm_score_col='Commu_Score',
+                comm_score_cutoff=0,
+                text_outline=False,
+                return_fig = False
+            )
 
