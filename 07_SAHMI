@@ -1,3 +1,67 @@
+#!/bin/bash
+
+##### step 1 #####
+base_dir="/home/SAHMI/sc_sequencing"
+results_dir="$base_dir/results"
+mkdir -p "$results_dir" 
+kraken2_path="~/kraken2"
+kraken_db_path="~/SAHMI/SAHMI/db/"
+blastn_path="~/kraken2/bin/blastn"
+kreport2mpa_path="~SAHMI/SAHMI/functions/kreport2mpa.py"
+run_kraken_script="~/SAHMI/SAHMI/functions/run_kraken.r"
+
+Rscript "$run_kraken_script" \
+                --sample "$tissue" \
+                --fq1 "$fq1_path" \
+                --fq2 "$fq2_path" \
+                --out_path "$tissue_out_dir/" \
+                --Kraken2Uniq_path "$kraken2_path" \
+                --kraken_database_path "$kraken_db_path" \
+                --ncbi_blast_path "$blastn_path" \
+                --kreport2mpa_path "$kreport2mpa_path" \
+                --paired T
+
+##### step 2 #####
+base_dir="~SAHMI/sc_sequencing/"
+mkdir -p "${sample_dir}/extract"
+
+        Rscript "~/SAHMI/SAHMI/functions/extract_microbiome_reads1.r" \
+                --sample_name "${sample}.1" \
+                --fq "${sample_dir}/${sample}_1.fq" \
+                --kraken_report "${sample_dir}/${sample}.kraken.report.txt" \
+                --mpa_report "${sample_dir}/${sample}.kraken.report.mpa.txt" \
+                --out_path "${sample_dir}/extract/"
+
+        Rscript "~/SAHMI/SAHMI/functions/extract_microbiome_reads1.r" \
+                --sample_name "${sample}.2" \
+                --fq "${sample_dir}/${sample}_2.fq" \
+                --kraken_report "${sample_dir}/${sample}.kraken.report.txt" \
+                --mpa_report "${sample_dir}/${sample}.kraken.report.mpa.txt" \
+                --out_path "${sample_dir}/extract/"
+
+        Rscript "~/SAHMI/SAHMI/functions/extract_microbiome_output.r" \
+                --sample_name "${sample}" \
+                --output_file "${sample_dir}/${sample}.kraken.output.txt" \
+                --kraken_report "${sample_dir}/${sample}.kraken.report.txt" \
+                --mpa_report "${sample_dir}/${sample}.kraken.report.mpa.txt" \
+                --out_path "${sample_dir}/extract/"
+
+##### step 3 #####
+mkdir -p "${sample_dir}/sckmer"
+
+Rscript "/home/xumuserver/HC/sc_sequencing/metagenomics/SAHMI/SAHMI/functions/sckmer.r"  \
+        --sample_name ${sample} \
+        --fa1 ${sample_dir}/extract/${sample}.1.fa \
+        --fa2 ${sample_dir}/extract/${sample}.2.fa \
+        --microbiome_output_file ${sample_dir}/extract/${sample}.microbiome.output.txt  \
+        --kraken_report ${sample_dir}/${sample}.kraken.report.txt  \
+        --mpa_report ${sample_dir}/${sample}.kraken.report.mpa.txt  \
+        --out_path ${sample_dir}/sckmer/ \
+        --cb_len 16 \
+        --umi_len 10
+
+
+##### plot by R #####
 report = read.delim('/home/SAHMI/tissue.kraken.report.txt', header = F)
 report$V8 = trimws(report$V8)
 kmer_data = read.table('/home/SAHMI/tissue.sckmer.txt', header = T)
